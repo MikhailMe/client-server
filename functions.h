@@ -12,7 +12,7 @@
 #define EXIT "shutdown"
 
 const size_t BUFFER_SIZE = 512;
-const size_t PORT = 25000;
+const size_t PORT = 19000;
 
 std::mutex mutex;
 std::unordered_map<int, std::thread> clients;
@@ -77,7 +77,7 @@ void write() {
 }
 
 // убиваем клиента по дескриптору сокета
-void foo(int desc_sock) {
+void kill(int desc_sock) {
     if (clients.count(desc_sock) > 0) {
         std::string string = "shutdown";
         send(desc_sock, string.c_str(), BUFFER_SIZE, 0);
@@ -85,25 +85,21 @@ void foo(int desc_sock) {
         close(desc_sock);
         auto &&thread = clients.find(desc_sock)->second;
         thread.join();
-        //clients.erase(desc_sock);
-        std::cout << "You kill " << desc_sock << " client" << std::endl;
     } else std::cout << "Sorry, but this client doesn't exist" << std::endl;
 }
 
 // убиваем определённого клиента
 void kill() {
     int desc_sock = enter(desc_sock);
-    foo(desc_sock);
+    kill(desc_sock);
+    clients.erase(desc_sock);
+    std::cout << "You kill " << desc_sock << " client" << std::endl;
 }
 
 // убиваем всех клиентов
 void killall() {
-    for (auto &&client : clients) {
-        std::cout << "1" << std::endl;
-        auto &&desc_sock = client.first;
-        std::cout << "client " << desc_sock << std::endl;
-        foo(desc_sock);
-    }
+    for (auto &&client : clients)
+        kill(client.first);
     clients.clear();
     std::cout << "All clients are disabled" << std::endl;
 }
@@ -134,7 +130,7 @@ void connection_handler(int desc_sock) {
         }
         if (strcmp(buffer, EXIT) == 0) {
             std::unique_lock<std::mutex> lock(mutex);
-            foo(desc_sock);
+            kill(desc_sock);
             std::cout << "\nClient " << desc_sock << " disconnected" << std::endl;
         } else {
             if (read_size == 0) {
