@@ -1,0 +1,1 @@
+/usr/bin/c++   -pthread -g2 -O0 -g   CMakeFiles/multithreadingserver.dir/multithreading_server.cpp.o  -o multithreadingserver 

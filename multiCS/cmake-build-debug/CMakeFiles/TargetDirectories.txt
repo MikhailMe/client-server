@@ -1,0 +1,5 @@
+/home/mikhail/Documents/Programming/C++/Network/multiCS/cmake-build-debug/CMakeFiles/edit_cache.dir
+/home/mikhail/Documents/Programming/C++/Network/multiCS/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+/home/mikhail/Documents/Programming/C++/Network/multiCS/cmake-build-debug/CMakeFiles/multithreadingserver.dir
+/home/mikhail/Documents/Programming/C++/Network/multiCS/cmake-build-debug/CMakeFiles/client.dir
+/home/mikhail/Documents/Programming/C++/Network/multiCS/cmake-build-debug/CMakeFiles/main.dir
