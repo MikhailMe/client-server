@@ -1,1 +1,0 @@
-/usr/bin/c++   -pthread -g2 -O0 -g   CMakeFiles/client.dir/client.cpp.o  -o client 
