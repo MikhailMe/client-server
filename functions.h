@@ -76,20 +76,7 @@ void write() {
     else std::cout << "Sorry, but this client doesn't exist" << std::endl;
 }
 
-/*// убиваем клиента по дескриптору сокета
-void kill(int desc_sock) {
-    if (clients.count(desc_sock) > 0) {
-        *//*std::string string = "shutdown";
-        send(desc_sock, string.c_str(), BUFFER_SIZE, 0);
-        shutdown(desc_sock, SHUT_RDWR);
-        close(desc_sock);
-        auto &&thread = clients.find(desc_sock)->second;
-        thread.join();
-        clients.erase(desc_sock);
-        std::cout << "You kill " << desc_sock << " client" << std::endl;*//*
-    } else std::cout << "Sorry, but this client doesn't exist" << std::endl;
-}*/
-
+// убиваем клиента по дескриптору сокета
 void foo(int desc_sock) {
     if (clients.count(desc_sock) > 0) {
         std::string string = "shutdown";
@@ -98,7 +85,7 @@ void foo(int desc_sock) {
         close(desc_sock);
         auto &&thread = clients.find(desc_sock)->second;
         thread.join();
-        clients.erase(desc_sock);
+        //clients.erase(desc_sock);
         std::cout << "You kill " << desc_sock << " client" << std::endl;
     } else std::cout << "Sorry, but this client doesn't exist" << std::endl;
 }
@@ -111,19 +98,11 @@ void kill() {
 
 // убиваем всех клиентов
 void killall() {
-    int desc_sock;
     for (auto &&client : clients) {
         std::cout << "1" << std::endl;
-        desc_sock = client.first;
+        auto &&desc_sock = client.first;
         std::cout << "client " << desc_sock << std::endl;
         foo(desc_sock);
-        /*desc_sock = client.first;
-        std::string string = "shutdown";
-        send(desc_sock, string.c_str(), BUFFER_SIZE, 0);
-        shutdown(desc_sock, SHUT_RDWR);
-        close(desc_sock);
-        auto &&thread = client.second;
-        thread.join();*/
     }
     clients.clear();
     std::cout << "All clients are disabled" << std::endl;
