@@ -7,7 +7,7 @@ int main() {
 
     // создали сокет, который будет слушать
     if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("Could not create socket\n");
+        perror("Could not create socket");
         return -1;
     }
 
@@ -16,16 +16,19 @@ int main() {
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(PORT);
 
+    int yes = 1;
+    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
     // привязали сокет к адресу
     if (bind(server_socket, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) < 0) {
-        perror("Bind failed\n");
+        perror("Bind failed");
         return -2;
     }
 
     // server ждёт запросов со стороны клиентов
     if (listen(server_socket, 3) != 0) {
         close(server_socket);
-        perror("Listen error\n");
+        perror("Listen error");
         return -3;
     }
 
@@ -36,9 +39,11 @@ int main() {
     help();
 
     // отдельный поток для сервера
+    std::unique_lock<std::mutex> lock(mutex);
     std::thread server_thread([server_socket]() -> void {
         server_handler(server_socket);
     });
+    lock.unlock();
 
     std::string command;
 
@@ -49,6 +54,7 @@ int main() {
         else if (command == "kill") kill();
         else if (command == "killall") killall();
         else if (command == "shutdown") {
+            killall();
             shutdown(server_socket, SHUT_RDWR);
             close(server_socket);
             break;

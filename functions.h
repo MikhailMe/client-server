@@ -12,10 +12,14 @@
 #define EXIT "shutdown"
 
 const size_t BUFFER_SIZE = 512;
-const size_t PORT = 19000;
+const size_t PORT = 32000;
+const int TIMEOUT_SEC = 0;
+const int TIMEOUT_USEC = 100;
 
 std::mutex mutex;
 std::unordered_map<int, std::thread> clients;
+std::mutex client_mutex;
+std::unordered_map<int, bool> client_states;
 
 // читаем столько, сколько пришло
 ssize_t readn(int socket, char *message, size_t length, int flags) {
@@ -36,14 +40,16 @@ void list() {
     if (clients.empty())
         std::cout << "List if clients is empty" << std::endl;
     else {
-        std::cout << "List of clients: " << std::endl;
+        std::cout << "List of clients: ";
         for (auto &&client : clients)
-            std::cout << client.first << std::endl;
+            std::cout << client.first << " ,";
     }
+    std::cout << std::endl;
 }
 
 // корректный ввод дескриптора сокета
-int enter(int desc_sock) {
+int enter() {
+    int desc_sock;
     while (true) {
         std::cout << "Enter id of client: ";
         std::cin >> desc_sock;
@@ -51,8 +57,10 @@ int enter(int desc_sock) {
             std::cout << "Please enter valid id of client" << std::endl;
             std::cin.clear();
             while (std::cin.get() != '\n');
+        } else if (clients.count(desc_sock) > 0) {
+            std::cout << "Please enter valid id of client" << std::endl;
+            break;
         }
-        else break;
     }
     return desc_sock;
 }
@@ -70,7 +78,7 @@ void write(int desc_sock) {
 
 // пишем сообщение определённому клиенту
 void write() {
-    int desc_sock = enter(desc_sock);
+    int desc_sock = enter();
     if (clients.count(desc_sock) > 0)
         write(desc_sock);
     else std::cout << "Sorry, but this client doesn't exist" << std::endl;
@@ -79,28 +87,33 @@ void write() {
 // убиваем клиента по дескриптору сокета
 void kill(int desc_sock) {
     if (clients.count(desc_sock) > 0) {
-        std::string string = "shutdown";
-        send(desc_sock, string.c_str(), BUFFER_SIZE, 0);
         shutdown(desc_sock, SHUT_RDWR);
         close(desc_sock);
         auto &&thread = clients.find(desc_sock)->second;
-        thread.join();
+        if (thread.joinable())
+            thread.join();
+        std::cout << "\nClient " << desc_sock << " disconnected" << std::endl;
     } else std::cout << "Sorry, but this client doesn't exist" << std::endl;
+}
+
+void lazy_kill(int desc_sock) {
+    if (client_states.count(desc_sock) > 0)
+        client_states[desc_sock] = true;
 }
 
 // убиваем определённого клиента
 void kill() {
-    int desc_sock = enter(desc_sock);
-    kill(desc_sock);
-    clients.erase(desc_sock);
-    std::cout << "You kill " << desc_sock << " client" << std::endl;
+    int desc_sock = enter();
+    std::unique_lock<std::mutex> lock(client_mutex);
+    lazy_kill(desc_sock);
+    std::cout << "You kill " << desc_sock << " client";
 }
 
 // убиваем всех клиентов
 void killall() {
+    std::unique_lock<std::mutex> lock(client_mutex);
     for (auto &&client : clients)
-        kill(client.first);
-    clients.clear();
+        lazy_kill(client.first);
     std::cout << "All clients are disabled" << std::endl;
 }
 
@@ -125,62 +138,93 @@ void connection_handler(int desc_sock) {
     while (true) {
         char buffer[BUFFER_SIZE];
         ssize_t read_size = readn(desc_sock, buffer, BUFFER_SIZE, 0);
-        if (read_size <= 0) {
+        if (read_size <= 0 || strcmp(buffer, EXIT) == 0)
             break;
-        }
-        if (strcmp(buffer, EXIT) == 0) {
-            std::unique_lock<std::mutex> lock(mutex);
-            kill(desc_sock);
-            std::cout << "\nClient " << desc_sock << " disconnected" << std::endl;
-        } else {
-            if (read_size == 0) {
-                perror("Client disconnected\n");
-                break;
-            } else if (read_size == -1) {
-                perror("Readn failed\n");
-                break;
-            }
-            send(desc_sock, buffer, BUFFER_SIZE, 0);
-            printServer(desc_sock, buffer, buffer);
-        }
+        send(desc_sock, buffer, BUFFER_SIZE, 0);
+        printServer(desc_sock, buffer, buffer);
     }
     close(desc_sock);
+}
+
+// если клиент сам отключился, то удаляем его из двух мап через 0,01 секунды
+// работает всегда
+void cleanup() {
+    std::unique_lock<std::mutex> lock(client_mutex);
+    auto &&it = std::begin(client_states);
+    while (it != std::end(client_states)) {
+        auto &&entry = *it;
+        auto &&fd = entry.first;
+        auto &&needClose = entry.second;
+        if (needClose) {
+            kill(fd);
+            it = client_states.erase(it);
+            clients.erase(fd);
+            continue;
+        }
+        ++it;
+    }
+}
+
+void closing(int server_socket, const char *closing_message) {
+    perror(closing_message);
+    shutdown(server_socket, SHUT_RDWR);
+    close(server_socket);
 }
 
 // хэдлер сервера
 void server_handler(int server_socket) {
     int new_socket;
     while (true) {
+        // задаёем таймаут
+        timeval timeout{TIMEOUT_SEC, TIMEOUT_USEC};
+        // задаём множество сокетов
+        fd_set server_sockets{};
+        FD_ZERO(&server_sockets);
+        FD_SET(server_socket, &server_sockets);
+        // выбираем сокет, у которого возник какой-то ивент
+        auto &&result = select(server_socket + 1, &server_sockets, nullptr, nullptr, &timeout);
+        cleanup();
+        if (result < 0) {
+            closing(server_socket, "Select failed");
+            break;
+        }
+        if (result == 0 || !FD_ISSET(server_socket, &server_sockets))
+            continue;
+        // асептим новый сокет
         new_socket = accept(server_socket, nullptr, nullptr);
         if (new_socket < 0) {
-            perror("Accept failed\n");
-            shutdown(server_socket, SHUT_RDWR);
-            close(server_socket);
+            closing(server_socket, "Accept failed");
             break;
         }
         std::cout << "\nConnection accepted" << std::endl;
         std::cout << "In list we have: " << clients.size() + 1 << std::endl;
-        std::flush(std::cout);
+        // так как new_socket пока не нужно убивать ставим false
+        {
+            std::unique_lock<std::mutex> lock(client_mutex);
+            client_states[new_socket] = false;
+        }
         // добавляем клиентов в мапу и даём каждому поток
         {
             std::unique_lock<std::mutex> lock(mutex);
             clients.emplace(new_socket, [new_socket]() -> void {
-                connection_handler(new_socket);
+                try {
+                    connection_handler(new_socket);
+                } catch (...) {}
+                // необходимо убить new_socket, поэтому ставим true
+                client_states[new_socket] = true;
             });
         }
     }
-    // сюда попадаем, когда вылетел accept => был вызван shutdown сервера
-    // поэтому необходимо закрыть все сокеты для клиентов
-    killall();
 }
 
 // хэндлер клиента для чтения в отдельном потоке
 void client_read_handler(int desc_sock) {
+    char buffer[BUFFER_SIZE + 1];
     while (true) {
-        char buffer[BUFFER_SIZE + 1];
+        bzero(buffer, BUFFER_SIZE + 1);
         // слушаем сервер
-        if (readn(desc_sock, buffer, BUFFER_SIZE, 0) == -1) {
-            perror("Readn error");
+        if (readn(desc_sock, buffer, BUFFER_SIZE, 0) <= 0) {
+            perror("Readn failed");
             close(desc_sock);
             break;
         }
