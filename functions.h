@@ -1,25 +1,14 @@
 #pragma once
 
-#include <cstring>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <iostream>
-#include <thread>
+#include <cstring>
 #include <unordered_map>
 #include <mutex>
 
-#define EXIT "shutdown"
-
-const size_t BUFFER_SIZE = 512;
-const size_t PORT = 32000;
-const int TIMEOUT_SEC = 0;
-const int TIMEOUT_USEC = 100;
-
-std::mutex mutex;
-std::unordered_map<int, std::thread> clients;
-std::mutex client_mutex;
-std::unordered_map<int, bool> client_states;
+#include "constants.h"
 
 // читаем столько, сколько пришло
 ssize_t readn(int socket, char *message, size_t length, int flags) {
@@ -58,7 +47,6 @@ int enter() {
             std::cin.clear();
             while (std::cin.get() != '\n');
         } else if (clients.count(desc_sock) > 0) {
-            std::cout << "Please enter valid id of client" << std::endl;
             break;
         }
     }
@@ -84,28 +72,12 @@ void write() {
     else std::cout << "Sorry, but this client doesn't exist" << std::endl;
 }
 
-// убиваем клиента по дескриптору сокета
-void kill(int desc_sock) {
-    if (clients.count(desc_sock) > 0) {
-        shutdown(desc_sock, SHUT_RDWR);
-        close(desc_sock);
-        auto &&thread = clients.find(desc_sock)->second;
-        if (thread.joinable())
-            thread.join();
-        std::cout << "\nClient " << desc_sock << " disconnected" << std::endl;
-    } else std::cout << "Sorry, but this client doesn't exist" << std::endl;
-}
-
-void lazy_kill(int desc_sock) {
-    if (client_states.count(desc_sock) > 0)
-        client_states[desc_sock] = true;
-}
-
 // убиваем определённого клиента
 void kill() {
     int desc_sock = enter();
     std::unique_lock<std::mutex> lock(client_mutex);
-    lazy_kill(desc_sock);
+    if (client_states.count(desc_sock) > 0)
+        client_states[desc_sock] = true;
     std::cout << "You kill " << desc_sock << " client";
 }
 
@@ -113,37 +85,34 @@ void kill() {
 void killall() {
     std::unique_lock<std::mutex> lock(client_mutex);
     for (auto &&client : clients)
-        lazy_kill(client.first);
+        client_states[client.first] = true;
     std::cout << "All clients are disabled" << std::endl;
 }
 
-// вывод всех команд, которые можно использовать на сервере
-void help() {
-    std::cout << "You can use the following commands:" << std::endl;
-    std::cout << "list     -  show list of all clients" << std::endl;
-    std::cout << "write    -  send message to certain client" << std::endl;
-    std::cout << "kill     -  remove certain client" << std::endl;
-    std::cout << "killall  -  remove all clients" << std::endl;
-    std::cout << "shutdown -  server shutdown" << std::endl;
-}
-
 // вывод отосланной и принятой информации клиента
-void printServer(int desc_sock, char request[], char response[]) {
-    std::cout << "Client's " << desc_sock << " request : " << request << std::endl;
-    std::cout << "Server's response: " << response << std::endl;
+void printServer(int desc_sock, char request[], char response[], int &request_server_number) {
+    std::cout << "Client's " << desc_sock << " request #" << request_server_number << ": " << request << std::endl;
+    std::cout << "Server's response #" << request_server_number << ": " << response << "\n" << std::endl;
 }
 
 // хэндлер каждого клиента
-void connection_handler(int desc_sock) {
+void *connection_handler(void *ds) {
+    // кастим к int, к нормальному виду дескриптора сокета
+    auto &&desc_sock = (int) (intptr_t) ds;
+    // номер запроса
+    int request_server_number = 0;
     while (true) {
         char buffer[BUFFER_SIZE];
         ssize_t read_size = readn(desc_sock, buffer, BUFFER_SIZE, 0);
-        if (read_size <= 0 || strcmp(buffer, EXIT) == 0)
+        if (read_size <= 0 || strcmp(buffer, EXIT) == 0) {
+            client_states[desc_sock] = true;
             break;
+        }
         send(desc_sock, buffer, BUFFER_SIZE, 0);
-        printServer(desc_sock, buffer, buffer);
+        printServer(desc_sock, buffer, buffer, ++request_server_number);
     }
     close(desc_sock);
+    pthread_exit(nullptr);
 }
 
 // если клиент сам отключился, то удаляем его из двух мап через 0,01 секунды
@@ -156,8 +125,17 @@ void cleanup() {
         auto &&fd = entry.first;
         auto &&needClose = entry.second;
         if (needClose) {
-            kill(fd);
+            // закрываем сокета
+            shutdown(fd, SHUT_RDWR);
+            close(fd);
+            // находим поток в основной паме по дескиптору сокета
+            auto &&thread = clients.find(fd)->second;
+            // джойним потоу
+            pthread_join(thread, nullptr);
+            std::cout << "\nClient " << fd << " disconnected" << std::endl;
+            // удаляем из мапы состяний
             it = client_states.erase(it);
+            // удаляем из основной мапы
             clients.erase(fd);
             continue;
         }
@@ -165,6 +143,7 @@ void cleanup() {
     }
 }
 
+// если произошла исключительная ситуация, закрываем сокет и пишем сообщение об ошибке
 void closing(int server_socket, const char *closing_message) {
     perror(closing_message);
     shutdown(server_socket, SHUT_RDWR);
@@ -172,14 +151,16 @@ void closing(int server_socket, const char *closing_message) {
 }
 
 // хэдлер сервера
-void server_handler(int server_socket) {
+void *server_handler(void *serv_sock) {
+    // кастим к int, к нормальному виду дескриптора сокета
+    auto &&server_socket = (int) (intptr_t) serv_sock;
     int new_socket;
     while (true) {
         // задаёем таймаут
         timeval timeout{TIMEOUT_SEC, TIMEOUT_USEC};
         // задаём множество сокетов
         fd_set server_sockets{};
-        FD_ZERO(&server_sockets);
+        FD_ZERO(&server_sockets); // NOLINT
         FD_SET(server_socket, &server_sockets);
         // выбираем сокет, у которого возник какой-то ивент
         auto &&result = select(server_socket + 1, &server_sockets, nullptr, nullptr, &timeout);
@@ -197,7 +178,7 @@ void server_handler(int server_socket) {
             break;
         }
         std::cout << "\nConnection accepted" << std::endl;
-        std::cout << "In list we have: " << clients.size() + 1 << std::endl;
+        std::cout << "In list we have: " << clients.size() + 1 << "\n" << std::endl;
         // так как new_socket пока не нужно убивать ставим false
         {
             std::unique_lock<std::mutex> lock(client_mutex);
@@ -206,19 +187,21 @@ void server_handler(int server_socket) {
         // добавляем клиентов в мапу и даём каждому поток
         {
             std::unique_lock<std::mutex> lock(mutex);
-            clients.emplace(new_socket, [new_socket]() -> void {
-                try {
-                    connection_handler(new_socket);
-                } catch (...) {}
-                // необходимо убить new_socket, поэтому ставим true
-                client_states[new_socket] = true;
-            });
+            pthread_t clients_thread;
+            if (pthread_create(&clients_thread, nullptr, connection_handler, (void *) (intptr_t) new_socket) == 0)
+                clients.emplace(new_socket, clients_thread);
+            else client_states[new_socket] = true;
         }
     }
+    pthread_exit(nullptr);
 }
 
 // хэндлер клиента для чтения в отдельном потоке
-void client_read_handler(int desc_sock) {
+void *client_read_handler(void *ds) {
+    // кастим к int, к нормальному виду дескриптора сокета
+    auto &&desc_sock = (int) (intptr_t) ds;
+    // номер запроса
+    int request_client_number = 0;
     char buffer[BUFFER_SIZE + 1];
     while (true) {
         bzero(buffer, BUFFER_SIZE + 1);
@@ -231,7 +214,8 @@ void client_read_handler(int desc_sock) {
         // если сервер прислал "shutdown", то умираем
         if (strcmp(buffer, EXIT) == 0)
             break;
-        std::cout << "Server's response: " << buffer << std::endl;
+        std::cout << "Server's response#" << ++request_client_number << ": " << buffer << std::endl;
     }
     close(desc_sock);
+    pthread_exit(nullptr);
 }

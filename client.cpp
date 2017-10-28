@@ -1,12 +1,21 @@
 #include "functions.h"
 
+// вывод всех команд, которые можно использовать на клиенте
+void client_help() {
+    std::cout << "************************************************" << std::endl;
+    std::cout << "*   Hello from server!                         *" << std::endl;
+    std::cout << "*                                              *" << std::endl;
+    std::cout << "*   You can write any messages to server       *" << std::endl;
+    std::cout << "************************************************" << std::endl;
+}
+
 int main(int argc, char **argv) {
-    int sock;
+    int client_socket;
     sockaddr_in addr{};
 
     // задали сокет
-    sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
+    client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket < 0) {
         perror("Can't create socket");
         return -1;
     }
@@ -17,41 +26,42 @@ int main(int argc, char **argv) {
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
     // установление соединения с сервером со стороны клиента
-    if (connect(sock, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+    if (connect(client_socket, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
         perror("Сonnection error");
         return -2;
     }
     std::cout << "Client started.. Send message to server" << std::endl;
-    std::string message;
+
+    // вывод команд, доступных для клиента
+    client_help();
+
+    // номер запроса
+    int request_client_number = 0;
 
     // отдельный поток на чтение сообщений с сервера
-    std::thread client_read([sock]() -> void {
-        client_read_handler(sock);
-    });
+    pthread_t client_thread;
+    pthread_create(&client_thread, nullptr, client_read_handler, (void *) (intptr_t) client_socket);
 
+    // здесь пишем сообщух эхо-серверу
     while (true) {
-
+        std::string message;
         // пишем, что отправляем клиенту
         std::getline(std::cin, message);
-
         // хотим отключится и отправляем "shutdown"
         if (strcmp(message.c_str(), EXIT) == 0) {
-            send(sock, EXIT, BUFFER_SIZE, 0);
+            send(client_socket, EXIT, BUFFER_SIZE, 0);
             break;
         }
-
         // отправляем message на сервер
-        if (send(sock, message.c_str(), BUFFER_SIZE, 0) == -1) {
+        if (send(client_socket, message.c_str(), BUFFER_SIZE, 0) == -1) {
             perror("Send error");
             break;
         }
-
-        std::cout << "Client's request : " << message << std::endl;
+        std::cout << "Client's request#" << ++request_client_number << ": " << message << std::endl;
     }
-    if (client_read.joinable())
-        client_read.join();
 
-    close(sock);
+    pthread_join(client_thread, nullptr);
+    close(client_socket);
     std::cout << "Disconnected" << std::endl;
     std::cout << "Client closed" << std::endl;
     return 0;
